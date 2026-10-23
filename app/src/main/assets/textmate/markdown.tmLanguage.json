@@ -1,0 +1,188 @@
+{
+  "name": "Markdown Extended",
+  "scopeName": "source.markdown",
+  "patterns": [
+    { "id": "comment", "include": "comment" },
+    { "detectOrder": false, "include": "#fenced-code" },
+    { "include": "#block-math" },
+    { "include": "#heading" },
+    { "include": "#blockquote" },
+    { "include": "#hr" },
+    { "include": "#list" },
+    { "include": "#autolink" },
+    { "include": "#link" },
+    { "include": "#inline-code" },
+    { "include": "#inline-math" },
+    { "include": "#strikethrough" },
+    { "include": "#bold" },
+    { "include": "#italic" }
+  ],
+  "repository": {
+    "comment": {
+      "pattern": "<!--[\\s\\S]*?-->",
+      "name": "comment.block.markdown"
+    },
+    "fenced-code": {
+      "begin": "^\\s*(`{3,}|~{3,})\\s*([^`~\\s]*)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.markdown" },
+        "2": { "name": "entity.name.function.markdown" }
+      },
+      "end": "^(?:\\s*)(\\1)(?:\\s*)$",
+      "endCaptures": { "1": { "name": "punctuation.definition.markdown" } },
+      "name": "markup.fenced_code.block.markdown",
+      "patterns": [
+        { "include": "#comment" }
+      ]
+    },
+    "block-math": {
+      "contentName": "markup.math.block.markdown",
+      "begin": "^\\s*\\$\\$\\s*$",
+      "end": "^\\s*\\$\\$\\s*$",
+      "patterns": [
+        { "include": "$self" }
+      ]
+    },
+    "heading": {
+      "begin": "^(#{1,6})\\s+",
+      "beginCaptures": { "1": { "name": "punctuation.definition.heading.markdown" } },
+      "end": "$",
+      "name": "markup.heading.markdown",
+      "contentName": "entity.name.section.markdown",
+      "patterns": [
+        { "include": "#inline-code" },
+        { "include": "#bold" },
+        { "include": "#italic" }
+      ]
+    },
+    "blockquote": {
+      "begin": "^\\s*>\\s?",
+      "end": "$",
+      "name": "markup.quote.markdown",
+      "patterns": [
+        { "include": "#inline-code" },
+        { "include": "#bold" },
+        { "include": "#italic" },
+        { "include": "#autolink" },
+        { "include": "#link" }
+      ]
+    },
+    "hr": {
+      "pattern": "^\\s*([-*_])(?:[ ]{0,3}\\1){2,250}\\s*$",
+      "name": "keyword.other.special-line.markdown"
+    },
+    "list": {
+      "begin": "^(\\s*)([-+*])(\\s+)",
+      "beginCaptures": {
+        "2": { "name": "punctuation.definition.list_item.markdown" },
+        "3": { "name": "meta.whitespace.newline.list.markdown" }
+      },
+      "end": "(?=^\\s*(?:[-+*]|[0-9]+\\.)\\s)|(?=^#{1,6}\\s)|(?=\\n?$)",
+      "contentName": "meta.paragraph.markdown",
+      "patterns": [
+        { "include": "#task-check" },
+        { "include": "#inline-code" },
+        { "include": "#inline-math" },
+        { "include": "#bold" },
+        { "include": "#italic" },
+        { "include": "#strikethrough" },
+        { "include": "#link" },
+        { "include": "#autolink" }
+      ]
+    },
+    "task-check": {
+      "match": "(?<=[-+*]\\s)\\[([\\sxX])\\](?=\\s)",
+      "captures": {
+        "1": { "name": "constant.language.emphasis.markdown" }
+      },
+      "name": "punctuation.definition.task.markdown"
+    },
+    "ordered-list": {
+      "begin": "^(\\s*)([0-9]+\\.)(\\s+)",
+      "beginCaptures": {
+        "2": { "name": "punctuation.definition.list_item.markdown" },
+        "3": { "name": "meta.whitespace.newline.list.markdown" }
+      },
+      "end": "(?=^\\s*(?:[-+*]|[0-9]+\\.)\\s)|(?=^#{1,6}\\s)|(?=\\n?$)",
+      "contentName": "meta.paragraph.markdown",
+      "patterns": [
+        { "include": "#inline-code" },
+        { "include": "#inline-math" },
+        { "include": "#bold" },
+        { "include": "#italic" },
+        { "include": "#strikethrough" },
+        { "include": "#link" },
+        { "include": "#autolink" }
+      ]
+    },
+    "autolink": {
+      "pattern": "<\\s*(https?|ftp)://[^>\\s]*>",
+      "name": "link.absolute.markdown"
+    },
+    "link": {
+      "begin": "(?<!\\\\)!?\\[",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.markdown" }
+      },
+      "end": "\\](?:\\([^)]*\\)|\\[[^\\]]*\\])?",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.markdown" }
+      },
+      "name": "string.other.link.title.markdown",
+      "patterns": [
+        { "include": "#inline-code" },
+        { "include": "#bold-italic" }
+      ]
+    },
+    "inline-code": {
+      "pattern": "(?<!\\\\)(`+)([^`]|[^`].*?)(?<!`)\\1(?!`)",
+      "name": "markup.inline.code.string.markdown",
+      "captures": {
+        "1": { "name": "punctuation.definition.inline.code.markdown" },
+        "2": { "name": "markup.inline.code.string.markdown" },
+        "3": { "name": "punctuation.definition.inline.code.markdown" }
+      }
+    },
+    "inline-math": {
+      "pattern": "\\$[^\\s$].*?\\$(?!\\$)",
+      "name": "markup.math.inline.string.markdown"
+    },
+    "strikethrough": {
+      "pattern": "(?<!\\\\)(~~)([^~]*)(~~)",
+      "name": "markup.strikethrough.markdown",
+      "captures": {
+        "1": { "name": "punctuation.definition.strikethrough.markdown" },
+        "2": { "name": "markup.strikethrough.markdown" },
+        "3": { "name": "punctuation.definition.strikethrough.markdown" }
+      }
+    },
+    "bold": {
+      "begin": "(?<!\\w)(\\*\\*|\\__)(?=\\s*(?:[\\w\"'$`\\[(<]))",
+      "end": "(\\1)(?![\\w])",
+      "name": "markup.bold.markdown",
+      "beginCaptures": { "1": { "name": "punctuation.definition.bold.markdown" } },
+      "endCaptures": { "1": { "name": "punctuation.definition.bold.markdown" } },
+      "patterns": [
+        { "include": "#inline-code" },
+        { "include": "#inline-math" },
+        { "include": "#strikethrough" }
+      ]
+    },
+    "italic": {
+      "begin": "(?<!\\w)(\\*)(?=\\s*(?:[\\w\"'$`\\[(<]))",
+      "end": "(\\1)(?![\\w])",
+      "name": "markup.italic.markdown",
+      "beginCaptures": { "1": { "name": "punctuation.definition.italic.markdown" } },
+      "endCaptures": { "1": { "name": "punctuation.definition.italic.markdown" } },
+      "patterns": [
+        { "include": "#inline-code" },
+        { "include": "#inline-math" },
+        { "include": "#strikethrough" }
+      ]
+    },
+    "bold-italic": {
+      "pattern": "\\*\\*\\*[^*]*\\*\\*\\*|__[^_]*__",
+      "name": "markup.bold.italic.markdown"
+    }
+  }
+}
