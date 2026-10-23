@@ -81,7 +81,7 @@
 
 ### 应用设置
 
-![应用设置](docs/screenshots/08-app-settings.png)
+![应用设置](docs/screenshots/08-settings-app.png)
 
 - **主题模式** — 跟随系统 / 浅色 / 深色
 - **色板选择** — 山蓝、苍绿、暖橙、紫晶、绯红（5 种种子色）
