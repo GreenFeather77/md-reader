@@ -8,22 +8,46 @@
 
 ---
 
+## 截图预览
+
+<p align="center">
+  <img src="docs/screenshots/01-home.png" width="220" />
+  <img src="docs/screenshots/02-reader.png" width="220" />
+  <img src="docs/screenshots/07-editor.png" width="220" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/03-search.png" width="220" />
+  <img src="docs/screenshots/04-toc.png" width="220" />
+  <img src="docs/screenshots/06-color-picker.png" width="220" />
+</p>
+
+---
+
 ## 功能特性
 
 ### 阅读模式
+
+![阅读界面](docs/screenshots/02-reader.png)
 
 - **原生渲染** — 基于 Markwon 4.6.2，支持表格、任务列表、删除线、软换行、内联 HTML、链接识别
 - **LaTeX 公式** — 支持 `$$...$$` 块级公式和 `$...$` 行内公式，行内公式使用基线对齐 + LRU 缓存（64 条）
 - **阅读进度** — 底部 3dp 进度条 + 滚动时显示"xx% · 章节"胶囊提示（1.2 秒后自动隐藏）
 - **章节目录** — 层级化章节导航，当前章节高亮，点击跳转
+  <p align="left"><img src="docs/screenshots/04-toc.png" width="180" /></p>
 - **文档内搜索** — 匹配高亮、`1/4` 计数、上/下切换、`Aa` 区分大小写开关、搜索词历史（最多 8 条，DataStore 持久化）
+  <p align="left"><img src="docs/screenshots/03-search.png" width="180" /></p>
 - **长按选择文本** — 自定义长按手势 → 系统文本选择手柄 → 复制/分享
 - **双指缩放字号** — 阅读区域 `ScaleGestureDetector`，范围 0.75×–2.2×
 - **自定义背景取色器** — 24 个预设色（12 浅色纸面 + 12 深色夜读）+ HSV 三滑杆 + HEX 输入 + 实时 WCAG 对比度提示。前景色、强调色、代码块色、表格头色均根据所选背景自动派生（亮度 → 墨色/纸色文字、强调色色调、代码面色板）
+  <p align="left"><img src="docs/screenshots/06-color-picker.png" width="180" /></p>
 - **主题系统** — 5 种种子色板（山蓝/苍绿/暖橙/紫晶/绯红），动态取色或固定色板，跟随系统/浅色/深色模式
 - **阅读偏好** — 字号缩放、行距（默认 1.55）、代码块主题（跟随/浅色/深色）、LaTeX 开关、常亮屏幕
+  <p align="left"><img src="docs/screenshots/05-settings.png" width="180" /></p>
 
 ### 编辑模式
+
+![编辑界面](docs/screenshots/07-editor.png)
 
 - **语法高亮** — Sora Editor 0.23.6 + TextMate 语法（`markdown.tmLanguage.json`）+ 自定义浅色/深色主题
 - **撤销 / 重做** — 顶栏按钮 + 菜单项
@@ -33,6 +57,8 @@
 - **内嵌预览** — 菜单切换渲染后的 Markdown 覆盖层
 
 ### 文件管理
+
+![首页](docs/screenshots/01-home.png)
 
 - **SAF 文件访问** — 通过系统文件选择器打开、保存、另存为，无需大范围存储权限
 - **原子写入** — 内容先写入本地临时文件（tmp + rename），再复制到目标 URI，确保即使 URI 写入中断也存在完整有效的副本
@@ -52,6 +78,16 @@
 - 可从任意应用（QQ、微信、文件管理器等）打开 `.md` / `.markdown` / `.mdown` / `.mdtxt` 文件
 - 支持 `ACTION_VIEW`：`text/plain`、`text/markdown`、`text/x-markdown`、`application/octet-stream`
 - 支持 `ACTION_SEND` / `ACTION_SEND_MULTIPLE`：分享文本和文件附件
+
+### 应用设置
+
+![应用设置](docs/screenshots/08-app-settings.png)
+
+- **主题模式** — 跟随系统 / 浅色 / 深色
+- **色板选择** — 山蓝、苍绿、暖橙、紫晶、绯红（5 种种子色）
+- **动态取色** — 从壁纸提取主题色，或固定色板
+- **阅读偏好** — 字号、行距、代码块主题、LaTeX、常亮
+- **编辑器偏好** — 字号、自动换行、行号、自动草稿
 
 ---
 
