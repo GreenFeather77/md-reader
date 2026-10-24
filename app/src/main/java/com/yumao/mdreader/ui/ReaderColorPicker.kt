@@ -3,6 +3,7 @@ package com.yumao.mdreader.ui
 import android.graphics.Color as AColor
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -73,22 +74,61 @@ internal val PaperPresets = listOf(
 
 internal val NightPresets = listOf(
     BgPreset("纯黑", 0xFF000000.toInt()),
-    BgPreset("墨灰", 0xFF141414.toInt()),
-    BgPreset("炭黑", 0xFF1C1C1E.toInt()),
-    BgPreset("夜蓝", 0xFF101825.toInt()),
-    BgPreset("墨绿", 0xFF0E1A14.toInt()),
-    BgPreset("深棕", 0xFF1A1410.toInt()),
-    BgPreset("酒红", 0xFF1D0F12.toInt()),
-    BgPreset("藏蓝", 0xFF0D1420.toInt()),
-    BgPreset("紫夜", 0xFF170F1E.toInt()),
-    BgPreset("橄榄", 0xFF16160C.toInt()),
-    BgPreset("石墨", 0xFF222527.toInt()),
-    BgPreset("蓝灰", 0xFF1B2026.toInt()),
+    BgPreset("墨灰", 0xFF1B1D20.toInt()),
+    BgPreset("炭黑", 0xFF232629.toInt()),
+    BgPreset("夜蓝", 0xFF14243A.toInt()),
+    BgPreset("墨绿", 0xFF12281B.toInt()),
+    BgPreset("深棕", 0xFF2A1E12.toInt()),
+    BgPreset("酒红", 0xFF2E161C.toInt()),
+    BgPreset("藏蓝", 0xFF1A2C4E.toInt()),
+    BgPreset("紫夜", 0xFF241736.toInt()),
+    BgPreset("橄榄", 0xFF262A12.toInt()),
+    BgPreset("石墨", 0xFF2E3438.toInt()),
+    BgPreset("蓝灰", 0xFF1F2D3D.toInt()),
+)
+
+/** Hand-picked accent candidates; first six for light paper, last four for dark. */
+internal val AccentPresets = listOf(
+    BgPreset("湖青", 0xFF2FA8C9.toInt()),
+    BgPreset("天蓝", 0xFF3B6FD4.toInt()),
+    BgPreset("松绿", 0xFF1F6E43.toInt()),
+    BgPreset("赭金", 0xFF955F28.toInt()),
+    BgPreset("绛紫", 0xFF7C4DA0.toInt()),
+    BgPreset("绯红", 0xFFC03A2B.toInt()),
+    BgPreset("亮青", 0xFF5BC8E8.toInt()),
+    BgPreset("亮蓝", 0xFF7DA9FF.toInt()),
+    BgPreset("薄荷", 0xFF6FD3A0.toInt()),
+    BgPreset("琥珀", 0xFFE0A64B.toInt()),
 )
 
 private fun hsvOf(argb: Int, out: FloatArray): FloatArray {
     AColor.colorToHSV(argb and 0x00FFFFFF, out)
     return out
+}
+
+/** 全角字符转半角,丢弃 #/0x 前缀与一切非十六进制字符;恰好 6 位时返回 ARGB,否则 null。 */
+private fun normalizeHexInput(raw: String): String {
+    val sb = StringBuilder()
+    for (ch in raw) {
+        val c = ch.code
+        when (c) {
+            0xFF10 - 0xFF10 + '#'.code -> sb.append('#')
+            in 0xFF10..0xFF19 -> sb.append((c - 0xFF10 + 0x30).toChar())   // ０-９
+            in 0xFF41..0xFF5A -> sb.append((c - 0xFF41 + 0x61).toChar())   // ａ-ｚ
+            in 0xFF21..0xFF3A -> sb.append((c - 0xFF21 + 0x41).toChar())   // Ａ-Ｚ
+            else -> sb.append(ch)
+        }
+    }
+    return sb.toString().filter { it.isLetterOrDigit() || it == '#' }.take(9)
+}
+
+private fun parseHexColor(input: String): Int? {
+    var s = normalizeHexInput(input)
+    if (s.startsWith("#")) s = s.substring(1)
+    if (s.length >= 2 && (s.startsWith("0x") || s.startsWith("0X"))) s = s.substring(2)
+    s = s.uppercase().filter { it.isDigit() || it in 'A'..'F' }
+    if (s.length != 6) return null
+    return (s.toLong(16).toInt() and 0x00FFFFFF) or 0xFF000000.toInt()
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -217,27 +257,96 @@ fun ReaderColorPickerSheet(vm: MdViewModel, onDismiss: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 OutlinedTextField(
                     value = hexInput,
-                    onValueChange = { hexInput = it; hexError = false },
+                    onValueChange = { hexInput = normalizeHexInput(it); hexError = false },
                     singleLine = true,
                     placeholder = { Text("#%06X".format(draft and 0x00FFFFFF)) },
                     isError = hexError,
-                    supportingText = if (hexError) ({ Text("格式: #RRGGBB") }) else null,
+                    supportingText = if (hexError) ({ Text("需要 6 位十六进制，如 1F6E43") }) else null,
                     modifier = Modifier.weight(1f),
                 )
                 Spacer(Modifier.size(12.dp))
                 Button(
                     onClick = {
-                        val parsed = runCatching {
-                            val raw = hexInput.trim().removePrefix("#").removePrefix("0x").uppercase()
-                            if (raw.length == 6) AColor.parseColor("#$raw") else -1
-                        }.getOrNull()
-                        if (parsed != null && parsed != -1) {
+                        val parsed = parseHexColor(hexInput)
+                        if (parsed != null) {
                             hexError = false
                             draft = parsed
                             hsvOf(parsed, hsv)
+                            hexInput = ""
                         } else hexError = true
                     },
                 ) { Text("应用") }
+            }
+
+            Text("强调色", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 16.dp))
+            Text(
+                "链接、列表符号、引用线与搜索高亮的颜色",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(top = 6.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.clickable { scope.launch { vm.settingsRepo.setReaderAccent(0) } },
+                ) {
+                    Box(
+                        Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "A",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text(
+                        "自动",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (settings.readerAccent == 0) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+                AccentPresets.forEach { p ->
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable { scope.launch { vm.settingsRepo.setReaderAccent(p.color) } },
+                    ) {
+                        Box(
+                            Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(Color(p.color)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (settings.readerAccent == p.color) {
+                                Box(
+                                    Modifier
+                                        .size(12.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(DerivedReaderColors.foreground(p.color)).copy(alpha = 0.55f)),
+                                )
+                            }
+                        }
+                        Text(
+                            p.name,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (settings.readerAccent == p.color) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
+                }
             }
 
             Text("文字颜色", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 14.dp))

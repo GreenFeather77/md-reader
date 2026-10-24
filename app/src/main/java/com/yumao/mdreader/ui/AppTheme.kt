@@ -17,8 +17,36 @@ import com.yumao.mdreader.data.ThemeMode
 import com.yumao.mdreader.data.ThemePalette
 import com.yumao.mdreader.data.ThemeSource
 
-private val LightBg = Color(0xFFF5F8FE)
+// Neutral (not blue-tinted) so every palette seed sits on it equally well.
+private val LightBg = Color(0xFFF7F8FA)
 private val DarkBg = Color(0xFF111218)
+
+private fun darken(c: Color, fraction: Float): Color = lerp(c, Color.Black, fraction)
+private fun lighten(c: Color, fraction: Float): Color = lerp(c, Color.White, fraction)
+
+/** Seed with its hue rotated, for a related-but-distinct tertiary. */
+private fun hueRotate(c: Color, degrees: Float): Color {
+    val argb = (0xFF shl 24) or
+        ((c.red * 255).toInt() shl 16) or
+        ((c.green * 255).toInt() shl 8) or
+        (c.blue * 255).toInt()
+    val hsv = FloatArray(3)
+    android.graphics.Color.colorToHSV(argb, hsv)
+    hsv[0] = (hsv[0] + degrees) % 360f
+    return Color(android.graphics.Color.HSVToColor(hsv))
+}
+
+private fun luminanceOf(c: Color): Double {
+    fun channel(v: Float): Double {
+        val s = v.toDouble()
+        return if (s <= 0.03928) s / 12.92 else Math.pow((s + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * channel(c.red) + 0.7152 * channel(c.green) + 0.0722 * channel(c.blue)
+}
+
+/** Black text on light seeds (orange/red), white on dark ones (blue/green). */
+private fun onColorFor(bg: Color): Color =
+    if (luminanceOf(bg) > 0.35) Color(0xFF14171A) else Color.White
 
 @Composable
 fun isAppDark(settings: AppSettings): Boolean = when (settings.themeMode) {
@@ -27,6 +55,10 @@ fun isAppDark(settings: AppSettings): Boolean = when (settings.themeMode) {
     ThemeMode.DARK -> true
 }
 
+/**
+ * All roles derive from the seed hue — no fixed navy text or green tertiary
+ * left over from the original blue-only palette.
+ */
 fun staticColorScheme(palette: ThemePalette, dark: Boolean): ColorScheme {
     val seed = Color(palette.seed)
     val bg = if (dark) DarkBg else LightBg
@@ -40,32 +72,32 @@ fun staticColorScheme(palette: ThemePalette, dark: Boolean): ColorScheme {
             surfaceContainer = lerp(bg, Color.Black, 0.05f),
             surfaceContainerHigh = lerp(bg, Color.White, 0.03f),
             surfaceContainerHighest = lerp(bg, Color.White, 0.07f),
-            primary = lerp(seed, Color.White, 0.18f),
+            primary = lighten(seed, 0.18f),
             onPrimary = Color(0xFF0A0A0C),
             primaryContainer = container,
-            onPrimaryContainer = lerp(seed, Color.White, 0.65f),
-            secondary = lerp(seed, Color.White, 0.55f),
+            onPrimaryContainer = lighten(seed, 0.62f),
+            secondary = lighten(seed, 0.55f),
             secondaryContainer = lerp(bg, seed, 0.22f),
-            onSecondaryContainer = lerp(seed, Color.White, 0.72f),
-            tertiary = lerp(seed, Color(0xFF8FE09A), 0.45f),
+            onSecondaryContainer = lighten(seed, 0.68f),
+            tertiary = lighten(hueRotate(seed, 55f), 0.25f),
         )
     } else {
         lightColorScheme(
             background = bg,
             surface = bg,
-            surfaceContainerLowest = Color(0xFFFFFFFF),
+            surfaceContainerLowest = Color.White,
             surfaceContainerLow = lerp(bg, Color.White, 0.62f),
             surfaceContainer = lerp(bg, Color.White, 0.32f),
             surfaceContainerHigh = lerp(bg, Color.White, 0.14f),
             surfaceContainerHighest = lerp(bg, Color.White, 0.05f),
             primary = seed,
-            onPrimary = Color.White,
+            onPrimary = onColorFor(seed),
             primaryContainer = container,
-            onPrimaryContainer = Color(0xFF00203F),
+            onPrimaryContainer = darken(seed, 0.52f),
             secondary = lerp(seed, Color(0xFF3C4043), 0.74f),
             secondaryContainer = lerp(bg, seed, 0.18f),
-            onSecondaryContainer = Color(0xFF00203F),
-            tertiary = lerp(seed, Color(0xFF1E8E3E), 0.55f),
+            onSecondaryContainer = darken(seed, 0.52f),
+            tertiary = darken(hueRotate(seed, 55f), 0.18f),
         )
     }
 }

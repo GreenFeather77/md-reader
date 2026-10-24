@@ -73,6 +73,14 @@ class RecentFilesRepository(private val context: Context) {
         }
     }
 
+    /** Replaces the whole list; used by backup import. Imported cache paths are
+     *  device-local so they are dropped to avoid stale fallbacks. */
+    suspend fun replaceAll(files: List<RecentFile>) {
+        context.recentStore.edit { p ->
+            p[keyList] = encode(files.map { it.copy(cachePath = null) })
+        }
+    }
+
     suspend fun remove(uri: String) {
         context.recentStore.edit { p ->
             val list = parse(p[keyList]).filterNot { it.uri == uri }

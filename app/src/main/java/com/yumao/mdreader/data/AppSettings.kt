@@ -35,4 +35,14 @@ data class AppSettings(
     val readerBgColor: Int = -1,
     /** Foreground deriving for custom bg color: false = auto contrast, true = force dark text style. */
     val readerTextLockedDark: Boolean = false,
+    /** Accent override for custom reading bg (links/markers/search); 0 = derive from bg hue. */
+    val readerAccent: Int = 0,
+    /** Render raw HTML blocks/inline in markdown. */
+    val htmlEnabled: Boolean = true,
+    /** Auto-detect bare URLs as links (Linkify). */
+    val linkifyEnabled: Boolean = true,
+    /** Heading size multiplier for reading style customization. */
+    val headingScale: Float = 1.0f,
+    /** Reader measure (content column) max width in dp. */
+    val readerMaxWidth: Int = 680,
 )

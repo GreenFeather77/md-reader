@@ -19,12 +19,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Difference
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PushPin
@@ -51,6 +55,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -84,7 +89,10 @@ fun HomeScreen(vm: MdViewModel) {
             .systemBarsPadding()
     ) {
         Column(Modifier.fillMaxSize()) {
-            HomeHeader(onSettings = { vm.go(Screen.SETTINGS) })
+            HomeHeader(
+                onSettings = { vm.go(Screen.SETTINGS) },
+                onCompare = { vm.go(Screen.COMPARE) },
+            )
             if (recents.isNotEmpty()) {
                 Row(
                     modifier = Modifier
@@ -115,11 +123,31 @@ fun HomeScreen(vm: MdViewModel) {
             }
             val filtered = if (searchQuery.isBlank()) recents
             else recents.filter { it.title.contains(searchQuery, ignoreCase = true) }
+            val isWide = LocalConfiguration.current.screenWidthDp >= 600
             if (recents.isEmpty()) {
                 EmptyState()
             } else if (filtered.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("没有匹配 \"$searchQuery\" 的文件", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else if (isWide) {
+                // 平板/横屏:自适应多列网格
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(320.dp),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 140.dp, top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    gridItems(filtered, key = { it.uri }) { item ->
+                        RecentCard(
+                            item = item,
+                            hasDraft = vm.hasDraft(item.uri),
+                            onOpen = { vm.reopen(item) },
+                            onRemove = { vm.removeRecent(item) },
+                            onTogglePin = { vm.togglePinned(item) },
+                        )
+                    }
                 }
             } else {
                 LazyColumn(
@@ -166,7 +194,7 @@ fun HomeScreen(vm: MdViewModel) {
 }
 
 @Composable
-private fun HomeHeader(onSettings: () -> Unit) {
+private fun HomeHeader(onSettings: () -> Unit, onCompare: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -184,6 +212,9 @@ private fun HomeHeader(onSettings: () -> Unit) {
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+        IconButton(onClick = onCompare) {
+            Icon(Icons.Outlined.Difference, contentDescription = "对比阅读")
         }
         IconButton(onClick = onSettings) {
             Icon(Icons.Outlined.Settings, contentDescription = "设置")

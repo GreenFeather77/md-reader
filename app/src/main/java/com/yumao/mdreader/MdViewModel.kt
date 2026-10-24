@@ -8,6 +8,8 @@ import androidx.lifecycle.viewModelScope
 import com.yumao.mdreader.data.AppSettings
 import com.yumao.mdreader.data.RecentFile
 import com.yumao.mdreader.data.RecentFilesRepository
+import com.yumao.mdreader.data.ReadingStats
+import com.yumao.mdreader.data.ReadingStatsRepository
 import com.yumao.mdreader.data.SettingsRepository
 import com.yumao.mdreader.files.DocUiState
 import com.yumao.mdreader.files.Document
@@ -20,17 +22,20 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-enum class Screen { HOME, READER, EDITOR, SETTINGS }
+enum class Screen { HOME, READER, EDITOR, SETTINGS, COMPARE }
 
 class MdViewModel(app: Application) : AndroidViewModel(app) {
 
     private val appCtx = app.applicationContext
     val settingsRepo = SettingsRepository(appCtx)
     val recentsRepo = RecentFilesRepository(appCtx)
+    val statsRepo = ReadingStatsRepository(appCtx)
     val draftStore = DraftStore(appCtx)
 
     private var draftJob: Job? = null
@@ -48,6 +53,13 @@ class MdViewModel(app: Application) : AndroidViewModel(app) {
     val recents: StateFlow<List<RecentFile>> = recentsRepo.recents
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
+    /** False until the recents DataStore has emitted at least once (cold-start restore guard). */
+    val recentsLoaded: StateFlow<Boolean> = recentsRepo.recents.map { true }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    val readingStats: StateFlow<ReadingStats> = statsRepo.stats
+        .stateIn(viewModelScope, SharingStarted.Eagerly, ReadingStats())
+
     private val _screen = MutableStateFlow(Screen.HOME)
     val screen: StateFlow<Screen> = _screen.asStateFlow()
 
@@ -62,6 +74,27 @@ class MdViewModel(app: Application) : AndroidViewModel(app) {
     fun consumeMessage() { _message.value = null }
 
     fun notify(text: String) { _message.value = text }
+
+    // ---------- Reading stats ----------
+
+    fun recordReadingTime(seconds: Int) {
+        viewModelScope.launch(Dispatchers.IO) { statsRepo.addReadingTime(seconds) }
+    }
+
+    fun recordDocOpened() {
+        viewModelScope.launch(Dispatchers.IO) { statsRepo.addDocOpen() }
+    }
+
+    /** Loads a recent entry's title + content for compare mode, cache first for speed. */
+    suspend fun loadRecentForCompare(recent: RecentFile): Pair<String, String>? {
+        return withContext(Dispatchers.IO) {
+            val fromCache = recent.cachePath?.let { path -> runCatching { FileIo.readCache(path) }.getOrNull() }
+            val content = fromCache ?: runCatching {
+                FileIo.readText(appCtx.contentResolver, Uri.parse(recent.uri))
+            }.getOrNull() ?: return@withContext null
+            recent.title to content
+        }
+    }
 
     // ---------- External intents ----------
 
@@ -269,7 +302,10 @@ class MdViewModel(app: Application) : AndroidViewModel(app) {
     fun saveReadingPosition(uri: Uri, anchor: Int, progress: Float) {
         android.util.Log.i("MDReader", "saveReadingPosition anchor=$anchor progress=$progress")
         viewModelScope.launch {
-            recentsRepo.updateReading(uri.toString(), anchor, progress)
+            // Activity finish 会取消 viewModelScope,NonCancellable 保证 DataStore 写入完成
+            withContext(NonCancellable) {
+                recentsRepo.updateReading(uri.toString(), anchor, progress)
+            }
         }
     }
 

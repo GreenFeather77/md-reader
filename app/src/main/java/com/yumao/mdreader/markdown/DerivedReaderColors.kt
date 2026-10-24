@@ -50,6 +50,28 @@ object DerivedReaderColors {
         return (0xFF shl 24) or (AColor.HSVToColor(hsv) and 0x00FFFFFF)
     }
 
+    /**
+     * Accent honoring a hand-picked [override] (0 = derive from bg hue).
+     * The override keeps its hue; value is nudged lighter on dark paper /
+     * darker on light paper until it reaches 3:1 against the background
+     * (link-text compromise), saturation only as a last resort.
+     */
+    fun accentOf(bg: Int, override: Int): Int {
+        if (override == 0) return accent(bg)
+        if (contrastRatio(override, bg) >= 3f) return override
+        val bgDark = luminance(bg) < 0.42f
+        val hsv = FloatArray(3)
+        AColor.colorToHSV(override and 0x00FFFFFF, hsv)
+        var candidate = override
+        repeat(12) {
+            hsv[2] = if (bgDark) (hsv[2] + 0.06f).coerceAtMost(1f) else (hsv[2] - 0.06f).coerceAtLeast(0.10f)
+            if (bgDark && hsv[2] >= 0.99f) hsv[1] = (hsv[1] - 0.04f).coerceAtLeast(0f)
+            candidate = (0xFF shl 24) or (AColor.HSVToColor(hsv) and 0x00FFFFFF)
+            if (contrastRatio(candidate, bg) >= 3f) return candidate
+        }
+        return candidate
+    }
+
     /** Overlay of body color at low alpha for hairlines/components. */
     fun mezze(argb: Int, alphaByte: Int): Int =
         (alphaByte shl 24) or (argb and 0x00FFFFFF)
@@ -79,5 +101,26 @@ object DerivedReaderColors {
         val dark = luminance(bg) < 0.42f
         hsv[2] = if (dark) (hsv[2] + 0.05f).coerceAtMost(1f) else (hsv[2] - 0.03f)
         return (0xFF shl 24) or (AColor.HSVToColor(hsv) and 0x00FFFFFF)
+    }
+
+    /**
+     * Nudges a foreground color lighter (on dark bg) or darker (on light bg) until it
+     * reaches the requested WCAG contrast against [bg]; used for code syntax colors
+     * which fixed presets may render too dim on derived dark planes.
+     */
+    fun ensureContrast(fg: Int, bg: Int, minRatio: Float = 4.5f): Int {
+        if (contrastRatio(fg, bg) >= minRatio) return fg
+        val bgDark = luminance(bg) < 0.42f
+        val hsv = FloatArray(3)
+        AColor.colorToHSV(fg and 0x00FFFFFF, hsv)
+        var candidate = fg
+        var step = 0.06f
+        repeat(12) {
+            hsv[2] = if (bgDark) (hsv[2] + step).coerceAtMost(1f) else (hsv[2] - step).coerceAtLeast(0.05f)
+            if (bgDark && hsv[2] >= 0.99f) hsv[1] = (hsv[1] - 0.05f).coerceAtLeast(0f)
+            candidate = (0xFF shl 24) or (AColor.HSVToColor(hsv) and 0x00FFFFFF)
+            if (contrastRatio(candidate, bg) >= minRatio) return candidate
+        }
+        return candidate
     }
 }

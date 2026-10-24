@@ -65,22 +65,22 @@ fun rememberMarkdownPalette(settings: AppSettings, dark: Boolean): MarkdownPalet
         )
     }
     val custom = settings.readerBgColor
-    if (custom == -1) return base
+    if (custom == -1) return withReadableCode(base)
 
     val bg = custom and 0x00FFFFFF
     val body = DerivedReaderColors.foreground(custom, settings.readerTextLockedDark)
-    val accent = DerivedReaderColors.accent(custom)
+    val accent = DerivedReaderColors.accentOf(custom, settings.readerAccent)
     val darkBg = DerivedReaderColors.luminance(bg) < 0.42f
     val codeProfile = if (darkBg) CodeDark else CodeLite
     val codeKeywords = if (darkBg) 0xFFB8C9FF.toInt() else 0xFF9334E6.toInt()
     val codeStrings = if (darkBg) 0xFFA6E3A5.toInt() else 0xFF146C2E.toInt()
     val codeNumbers = if (darkBg) 0xFFF5C26B.toInt() else 0xFFB26500.toInt()
     val codeComments = DerivedReaderColors.mezze(body, 0x66)
-    return base.copy(
+    val derived = base.copy(
         bodyText = body,
         link = accent,
         quoteText = DerivedReaderColors.mezze(body, 0xB4),
-        quoteBar = accent,
+        quoteBar = DerivedReaderColors.mezze(accent, 0x99),
         ruleColor = DerivedReaderColors.mezze(body, 0x42),
         headingRule = DerivedReaderColors.mezze(body, 0x42),
         listMarker = accent,
@@ -97,7 +97,18 @@ fun rememberMarkdownPalette(settings: AppSettings, dark: Boolean): MarkdownPalet
         tableHeaderBg = DerivedReaderColors.headerPlane(bg),
         tableRowBg = 0x00000000,
     )
+    return withReadableCode(derived)
 }
+
+/** Guarantees code syntax colors stay readable (>= 4.5:1) on their actual planes. */
+private fun withReadableCode(p: MarkdownPalette): MarkdownPalette = p.copy(
+    codeText = DerivedReaderColors.ensureContrast(p.codeText, p.codeBg),
+    codeKeywords = DerivedReaderColors.ensureContrast(p.codeKeywords, p.codeBg),
+    codeStrings = DerivedReaderColors.ensureContrast(p.codeStrings, p.codeBg),
+    codeNumbers = DerivedReaderColors.ensureContrast(p.codeNumbers, p.codeBg),
+    codeComments = DerivedReaderColors.ensureContrast(p.codeComments, p.codeBg),
+    codeInlineText = DerivedReaderColors.ensureContrast(p.codeInlineText, p.codeInlineBg),
+)
 
 private data class CodeProfile(val first: Int, val second: Int, val third: Int, val fourth: Int)
 
@@ -123,6 +134,10 @@ fun rememberMarkwon(settings: AppSettings, dark: Boolean): Markwon {
         settings.codeTheme,
         settings.readerBgColor,
         settings.readerTextLockedDark,
+        settings.readerAccent,
+        settings.htmlEnabled,
+        settings.linkifyEnabled,
+        settings.headingScale,
         dark,
         fontPx,
     ) {

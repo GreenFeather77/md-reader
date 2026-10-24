@@ -66,8 +66,10 @@ object MarkwonFactory {
                 images.addSchemeHandler(FileSchemeHandler.create())
                 images.addSchemeHandler(ContentSchemeHandler(context))
             })
-            .usePlugin(HtmlPlugin.create())
-            .usePlugin(LinkifyPlugin.create())
+            .apply {
+                if (settings.htmlEnabled) usePlugin(HtmlPlugin.create())
+                if (settings.linkifyEnabled) usePlugin(LinkifyPlugin.create())
+            }
             .usePlugin(MovementMethodPlugin.link())
             .usePlugin(CodeHighlightPlugin(palette))
             .usePlugin(object : AbstractMarkwonPlugin() {
@@ -90,6 +92,8 @@ object MarkwonFactory {
                         .headingBreakHeight(0)
                         .headingTextSizeMultipliers(
                             floatArrayOf(1.75f, 1.45f, 1.25f, 1.10f, 1.0f, 0.95f)
+                                .map { it * settings.headingScale }
+                                .toFloatArray()
                         )
                         .thematicBreakColor(palette.ruleColor)
                         .thematicBreakHeight((1 * density).toInt().coerceAtLeast(1))

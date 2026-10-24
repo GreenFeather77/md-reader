@@ -27,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.yumao.mdreader.compare.CompareScreen
 import com.yumao.mdreader.data.AppSettings
 import com.yumao.mdreader.editor.EditorScreen
 import com.yumao.mdreader.home.HomeScreen
@@ -93,6 +94,7 @@ private fun AppRoot(vm: MdViewModel) {
                         Screen.READER -> ReaderScreen(vm, markwon)
                         Screen.EDITOR -> EditorScreen(vm)
                         Screen.SETTINGS -> SettingsScreen(vm)
+                        Screen.COMPARE -> CompareScreen(vm, markwon)
                     }
                 }
                 SnackbarHost(

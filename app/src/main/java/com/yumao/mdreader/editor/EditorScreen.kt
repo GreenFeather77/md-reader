@@ -352,7 +352,31 @@ fun EditorScreen(vm: MdViewModel) {
 
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (previewMode) {
+                    // 异步渲染:预览曾直接在 update 块里主线程 toMarkdown,大文件会卡死 UI
                     val markwon = com.yumao.mdreader.ui.rememberMarkwon(settings, dark)
+                    val previewRenderer = remember { com.yumao.mdreader.render.MarkwonRenderer() }
+                    val previewTv = remember { mutableStateOf<android.widget.TextView?>(null) }
+                    var previewRenderedFor by remember { mutableStateOf<String?>(null) }
+                    DisposableEffect(Unit) {
+                        onDispose { previewRenderer.cancel() }
+                    }
+                    LaunchedEffect(document.content, markwon) {
+                        val content = com.yumao.mdreader.markdown.RelativeImages.resolve(
+                            document.content, document.uri
+                        )
+                        if (previewRenderedFor == content) return@LaunchedEffect
+                        previewRenderedFor = content
+                        previewTv.value?.text = "渲染中…"
+                        previewRenderer.submit(
+                            previewRenderer.nextSeq(), markwon, content, 1,
+                            java.util.concurrent.atomic.AtomicBoolean(false),
+                        ) { out ->
+                            val tv = previewTv.value
+                            if (tv != null && out != null) {
+                                markwon.setParsedMarkdown(tv, out as android.text.Spanned)
+                            }
+                        }
+                    }
                     AndroidView(
                         modifier = Modifier.fillMaxSize().background(cs.surface),
                         factory = { ctx ->
@@ -361,14 +385,10 @@ fun EditorScreen(vm: MdViewModel) {
                                 val tv = android.widget.TextView(ctx)
                                 tv.setPadding(48, 80, 48, 80)
                                 addView(tv, android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
+                                previewTv.value = tv
                             }
                         },
-                        update = { sv ->
-                            val tv = sv.getChildAt(0) as android.widget.TextView
-                            runCatching {
-                                tv.text = markwon.toMarkdown(document.content)
-                            }
-                        },
+                        update = { },
                     )
                 } else {
                     AndroidView(

@@ -32,7 +32,12 @@ class SettingsRepository(private val context: Context) {
         val searchHistory = stringPreferencesKey("search_history")
         val readerBgColor = intPreferencesKey("reader_bg_color")
         val readerTextLockedDark = booleanPreferencesKey("reader_text_locked_dark")
+        val readerAccent = intPreferencesKey("reader_accent")
         val searchMatchCase = booleanPreferencesKey("search_match_case")
+        val htmlEnabled = booleanPreferencesKey("html_enabled")
+        val linkifyEnabled = booleanPreferencesKey("linkify_enabled")
+        val headingScale = floatPreferencesKey("heading_scale")
+        val readerMaxWidth = intPreferencesKey("reader_max_width")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
@@ -54,6 +59,11 @@ class SettingsRepository(private val context: Context) {
             autoDraftEnabled = p[Keys.autoDraftEnabled] ?: true,
             readerBgColor = p[Keys.readerBgColor] ?: -1,
             readerTextLockedDark = p[Keys.readerTextLockedDark] ?: false,
+            readerAccent = p[Keys.readerAccent] ?: 0,
+            htmlEnabled = p[Keys.htmlEnabled] ?: true,
+            linkifyEnabled = p[Keys.linkifyEnabled] ?: true,
+            headingScale = (p[Keys.headingScale] ?: 1.0f).coerceIn(0.8f, 1.5f),
+            readerMaxWidth = (p[Keys.readerMaxWidth] ?: 680).coerceIn(480, 800),
         )
     }
 
@@ -93,6 +103,11 @@ class SettingsRepository(private val context: Context) {
     suspend fun setAutoDraftEnabled(value: Boolean) = edit { it[Keys.autoDraftEnabled] = value }
     suspend fun setReaderBgColor(value: Int) = edit { it[Keys.readerBgColor] = value }
     suspend fun setReaderTextLockedDark(value: Boolean) = edit { it[Keys.readerTextLockedDark] = value }
+    suspend fun setReaderAccent(value: Int) = edit { it[Keys.readerAccent] = value }
+    suspend fun setHtmlEnabled(value: Boolean) = edit { it[Keys.htmlEnabled] = value }
+    suspend fun setLinkifyEnabled(value: Boolean) = edit { it[Keys.linkifyEnabled] = value }
+    suspend fun setHeadingScale(value: Float) = edit { it[Keys.headingScale] = value.coerceIn(0.8f, 1.5f) }
+    suspend fun setReaderMaxWidth(value: Int) = edit { it[Keys.readerMaxWidth] = value.coerceIn(480, 800) }
 
     private suspend fun edit(block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {
         context.dataStore.edit(block)

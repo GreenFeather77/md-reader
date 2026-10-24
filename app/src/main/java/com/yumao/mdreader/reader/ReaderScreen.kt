@@ -8,8 +8,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
-import android.os.Handler
-import android.os.Looper
 import android.text.Layout
 import android.text.Spannable
 import android.text.Spanned
@@ -46,8 +44,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -107,7 +107,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -115,41 +117,38 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.doOnLayout
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.util.Log
 import com.yumao.mdreader.MdViewModel
 import com.yumao.mdreader.Screen
 import com.yumao.mdreader.data.CodeThemeMode
 import com.yumao.mdreader.files.DocUiState
+import com.yumao.mdreader.markdown.LatexSpan
+import com.yumao.mdreader.markdown.RelativeImages
+import com.yumao.mdreader.markdown.TableSource
 import com.yumao.mdreader.markdown.TextSearch
 import io.noties.markwon.Markwon
+import io.noties.markwon.core.spans.CodeBlockSpan
+import io.noties.markwon.core.spans.CodeSpan
 import io.noties.markwon.core.spans.HeadingSpan
+import io.noties.markwon.ext.tables.TableSpan
 import io.noties.markwon.image.AsyncDrawableSpan
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 
 data class TocEntry(val title: String, val level: Int, val offset: Int)
 
 private data class ScrollInfo(val anchor: Int, val progress: Float, val heading: Int)
 
-// Render pipeline deliberately avoids kotlinx.coroutines: withContext resumption
-// back to the Compose dispatcher was silently lost under both debug and release
-// (stuck renders). A plain executor + Handler(Looper.getMainLooper()) is reliable.
-private val markwonRenderExecutor = Executors.newSingleThreadExecutor { r ->
-    Thread(r, "md-render").apply {
-        isDaemon = true
-        priority = Thread.NORM_PRIORITY
-    }
-}
-private val markwonMainHandler = Handler(Looper.getMainLooper())
-private val markwonRenderSeq = AtomicLong(0)
-
-private const val RENDER_TIMEOUT_MS = 20_000L
+// 渲染管线见 render/MarkwonRenderer.kt:单线程 Executor + Handler + 20s 看门狗,
+// 不用协程(withContext 回 Compose 的 resumption 会静默丢失导致白屏)。
+private val renderPool = com.yumao.mdreader.render.MarkwonRenderer()
 
 private fun exportHtml(markdown: String, title: String): String {
     val parser = org.commonmark.parser.Parser.builder().build()
@@ -178,6 +177,7 @@ fun ReaderScreen(vm: MdViewModel, markwon: Markwon) {
     val docState by vm.doc.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val recents by vm.recents.collectAsStateWithLifecycle()
+    val recentsLoaded by vm.recentsLoaded.collectAsStateWithLifecycle()
     val searchHistory by vm.settingsRepo.searchHistoryFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val searchMatchCase by vm.settingsRepo.searchMatchCaseFlow.collectAsStateWithLifecycle(initialValue = false)
     val dtoScope = rememberCoroutineScope()
@@ -212,6 +212,10 @@ fun ReaderScreen(vm: MdViewModel, markwon: Markwon) {
     var showShareMenu by remember { mutableStateOf(false) }
     var toc by remember { mutableStateOf<List<TocEntry>>(emptyList()) }
     var chromeVisible by remember { mutableStateOf(true) }
+    var autoScrollActive by remember(docUri) { mutableStateOf(false) }
+    var autoScrollSpeed by remember { mutableStateOf(1f) }
+    var tableOrdinal by remember { mutableStateOf(-1) }
+    var showTableMenu by remember { mutableStateOf(false) }
 
     var searchOpen by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -219,17 +223,27 @@ fun ReaderScreen(vm: MdViewModel, markwon: Markwon) {
     var currentMatch by remember { mutableStateOf(0) }
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
-    val initialAnchor = remember(docUri) {
-        recents.firstOrNull { it.uri == docUri?.toString() }?.anchor ?: 0
-    }
-    var restorePending by remember(docUri) { mutableStateOf(initialAnchor > 0) }
-    var scrollAnchor by remember(docUri) { mutableStateOf(initialAnchor) }
-    var scrollProgress by remember(docUri) { mutableStateOf(0f) }
-    var currentHeading by remember(docUri) { mutableStateOf(-1) }
+    // 滚动状态不用 docUri 作 remember key:滚动监听器在 AndroidView factory 里只注册一次,
+    // 原地换文档(阅读中收到新 intent)时会写入失联的旧 state;改为普通 remember + 换文档时重置
+    var scrollAnchor by remember { mutableStateOf(0) }
+    var scrollProgress by remember { mutableStateOf(0f) }
+    var currentHeading by remember { mutableStateOf(-1) }
+
+    // null = 尚未判定。冷启动 ACTION_VIEW 时 recents 流可能还没发射,立即读会拿到 0 丢失恢复点
+    var pendingAnchor by remember(docUri) { mutableStateOf<Int?>(null) }
+    var restoreDone by remember(docUri) { mutableStateOf(false) }
 
     var rendering by remember { mutableStateOf(false) }
     var showRendering by remember { mutableStateOf(false) }
-    var contentRendered by remember(docUri) { mutableStateOf(false) }
+    var contentRendered by remember { mutableStateOf(false) }
+
+    LaunchedEffect(docUri) {
+        scrollAnchor = 0
+        scrollProgress = 0f
+        currentHeading = -1
+        contentRendered = false
+        renderPool.cancel()
+    }
     var percentVisible by remember { mutableStateOf(false) }
     LaunchedEffect(rendering) {
         if (rendering) {
@@ -325,15 +339,23 @@ fun ReaderScreen(vm: MdViewModel, markwon: Markwon) {
         currentMatch = 0
     }
 
-    val searchAllArgb = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f).toArgb()
-    val searchCurrentArgb = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f).toArgb()
+    // 自定义背景下搜索高亮/进度条跟随阅读强调色,而非 App 主题色
+    val readerAccentArgb = if (settings.readerBgColor != -1) {
+        com.yumao.mdreader.markdown.DerivedReaderColors.accentOf(settings.readerBgColor, settings.readerAccent)
+    } else {
+        MaterialTheme.colorScheme.primary.toArgb()
+    }
+    val searchAllArgb = Color(readerAccentArgb).copy(alpha = 0.22f).toArgb()
+    val searchCurrentArgb = Color(readerAccentArgb).copy(alpha = 0.5f).toArgb()
 
     LaunchedEffect(matches, currentMatch, searchOpen, renderTick) {
         val tv = textRef.value ?: return@LaunchedEffect
         applySearchHighlights(tv, searchOpen, matches, currentMatch, searchAllArgb, searchCurrentArgb)
         if (searchOpen && matches.isNotEmpty()) {
             val idx = currentMatch.coerceIn(matches.indices)
-            scrollToOffset(tv, scrollRef.value, matches[idx].first)
+            val offset = matches[idx].first
+            // 渲染刚 setText 完成时 layout 仍是旧文本的,等布局后再算 y,否则落点偏移
+            tv.doOnLayout { scrollToOffset(tv, scrollRef.value, offset) }
         }
     }
 
@@ -348,8 +370,84 @@ fun ReaderScreen(vm: MdViewModel, markwon: Markwon) {
     DisposableEffect(docUri) {
         onDispose {
             Log.i("MDReader", "dispose save anchor=$scrollAnchor progress=$scrollProgress rendered=$contentRendered")
-            markwonRenderSeq.incrementAndGet()
+            renderPool.cancel()
             if (docUri != null && contentRendered) vm.saveReadingPosition(docUri, scrollAnchor, scrollProgress)
+        }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, docUri) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP && docUri != null && contentRendered) {
+                Log.i("MDReader", "onStop save anchor=$scrollAnchor progress=$scrollProgress")
+                vm.saveReadingPosition(docUri, scrollAnchor, scrollProgress)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // 阅读统计:每次文档渲染完成计一次打开;前台每 15s 记一次阅读时长
+    LaunchedEffect(docUri, contentRendered) {
+        if (docUri == null || !contentRendered) return@LaunchedEffect
+        vm.recordDocOpened()
+        while (true) {
+            delay(15_000)
+            if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                vm.recordReadingTime(15)
+            }
+        }
+    }
+
+    var tocAutoOpened by remember(docUri) { mutableStateOf(false) }
+    // 平板/宽屏:目录解析完成后自动展开侧边栏
+    val wideEnough = LocalConfiguration.current.screenWidthDp >= 600
+    LaunchedEffect(toc, docUri) {
+        if (wideEnough && !tocAutoOpened && toc.isNotEmpty()) {
+            tocAutoOpened = true
+            showToc = true
+        }
+    }
+
+    // 恢复阅读位置:等 recents 首次加载完成再判定锚点,渲染完成后落地
+    LaunchedEffect(recents, recentsLoaded, docUri) {
+        if (pendingAnchor != null || !recentsLoaded) return@LaunchedEffect
+        pendingAnchor = recents.firstOrNull { it.uri == docUri?.toString() }?.anchor ?: 0
+    }
+    LaunchedEffect(pendingAnchor, contentRendered) {
+        if (!contentRendered || restoreDone) return@LaunchedEffect
+        val anchor = pendingAnchor ?: return@LaunchedEffect
+        restoreDone = true
+        if (anchor > 0) {
+            val tv = textRef.value ?: return@LaunchedEffect
+            tv.doOnLayout {
+                val y = restoreScroll(tv, scrollRef.value, anchor)
+                Log.i("MDReader", "restore anchor=$anchor y=$y")
+                scrollRef.value?.let { sv ->
+                    scrollInfo(tv, sv, toc)?.let {
+                        scrollAnchor = it.anchor
+                        scrollProgress = it.progress
+                        currentHeading = it.heading
+                    }
+                }
+            }
+        }
+    }
+
+    // 提词器:每 40ms 步进一次,到底自动停止
+    val densityF = LocalDensity.current.density
+    LaunchedEffect(autoScrollActive, autoScrollSpeed, docUri) {
+        if (!autoScrollActive) return@LaunchedEffect
+        while (true) {
+            delay(40)
+            val sv = scrollRef.value ?: break
+            val maxScroll = ((sv.getChildAt(0)?.height ?: 0) - sv.height).coerceAtLeast(0)
+            if (sv.scrollY >= maxScroll) {
+                autoScrollActive = false
+                break
+            }
+            val step = (densityF * 0.5f * autoScrollSpeed).toInt().coerceAtLeast(1)
+            sv.scrollTo(0, (sv.scrollY + step).coerceAtMost(maxScroll))
         }
     }
 
@@ -361,18 +459,19 @@ fun ReaderScreen(vm: MdViewModel, markwon: Markwon) {
         val keepY = scrollRef.value?.scrollY ?: 0
         renderedKey = newKey
         rendering = true
-        val content = document.content
-        val seq = markwonRenderSeq.incrementAndGet()
+        val content = RelativeImages.resolve(document.content, document.uri)
+        val seq = renderPool.nextSeq()
         val finished = AtomicBoolean(false)
         Log.i("MDReader", "render start len=${content.length} first=$first seq=$seq")
 
         fun finishRender(rendered: CharSequence?) {
             val workspace = textRef.value ?: tv
             if (rendered != null) {
-                runCatching { io.noties.markwon.image.AsyncDrawableScheduler.unschedule(workspace) }
-                workspace.setText(rendered, TextView.BufferType.SPANNABLE)
-                runCatching { io.noties.markwon.image.AsyncDrawableScheduler.schedule(workspace) }
-                    .onFailure { Log.w("MDReader", "schedule drawables failed", it) }
+                // 必须走 setParsedMarkdown:toMarkdown 后手动 setText 会绕过插件的
+                // before/afterSetText 钩子,表格行拿不到重排 invalidator(色带错位、末行截断),
+                // 图片也不会被调度
+                runCatching { markwon.setParsedMarkdown(workspace, rendered as Spanned) }
+                    .onFailure { Log.w("MDReader", "setParsedMarkdown failed", it) }
             } else {
                 Log.w("MDReader", "render watchdog exhausted (seq=$seq); fallback to main-thread render")
                 runCatching { markwon.setMarkdown(workspace, content) }
@@ -381,21 +480,7 @@ fun ReaderScreen(vm: MdViewModel, markwon: Markwon) {
             Log.i("MDReader", "render done seq=$seq textLen=${workspace.text?.length}")
             toc = collectToc(workspace)
             contentRendered = workspace.text?.isNotEmpty() == true
-            if (restorePending) {
-                restorePending = false
-                val anchor = initialAnchor
-                workspace.doOnLayout {
-                    val y = restoreScroll(workspace, scrollRef.value, anchor)
-                    Log.i("MDReader", "restore anchor=$anchor y=$y")
-                    scrollRef.value?.let { sv ->
-                        scrollInfo(workspace, sv, toc)?.let {
-                            scrollAnchor = it.anchor
-                            scrollProgress = it.progress
-                            currentHeading = it.heading
-                        }
-                    }
-                }
-            } else if (!first) {
+            if (!first) {
                 workspace.doOnLayout { scrollRef.value?.scrollTo(0, keepY) }
             }
             renderTick++
@@ -437,6 +522,19 @@ fun ReaderScreen(vm: MdViewModel, markwon: Markwon) {
                     textRef.value = tv
                     tv.setOnClickListener { chromeVisible = !chromeVisible }
                     tv.onImageTap = { drawable -> previewBitmap = drawable.toBitmapOrNull() }
+                    tv.onCodeTap = { code ->
+                        copyToClipboard(ctx, code)
+                        vm.notify("已复制代码")
+                    }
+                    tv.onLatexTap = { latex ->
+                        copyToClipboard(ctx, latex)
+                        vm.notify("已复制公式源码")
+                    }
+                    tv.onTableTap = { ordinal ->
+                        tableOrdinal = ordinal
+                        showTableMenu = true
+                    }
+                    tv.maxContentDp = settings.readerMaxWidth
                     tv.onPinchFinished = { fraction ->
                         val next = (fontScaleState.value * fraction).coerceIn(0.75f, 2.2f)
                         scope3.launch { vm.settingsRepo.setReaderFontScale(next) }
@@ -465,6 +563,7 @@ fun ReaderScreen(vm: MdViewModel, markwon: Markwon) {
                 tv.highlightColor = contentHighlightArgb
                 tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f * settings.readerFontScale)
                 tv.setLineSpacing(0f, settings.readerLineHeight)
+                (tv as? ReadingTextView)?.maxContentDp = settings.readerMaxWidth
             },
         )
 
@@ -489,7 +588,7 @@ fun ReaderScreen(vm: MdViewModel, markwon: Markwon) {
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .height(3.dp),
-                color = MaterialTheme.colorScheme.primary,
+                color = Color(readerAccentArgb),
                 trackColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.9f),
                 drawStopIndicator = {},
             )
@@ -519,6 +618,45 @@ fun ReaderScreen(vm: MdViewModel, markwon: Markwon) {
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp),
                     maxLines = 1,
                 )
+            }
+        }
+
+        AnimatedVisibility(
+            visible = autoScrollActive,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 56.dp),
+            enter = fadeIn() + scaleIn(),
+            exit = fadeOut() + scaleOut(),
+        ) {
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.96f),
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                ) {
+                    IconButton(onClick = { autoScrollActive = false }) {
+                        Icon(Icons.Outlined.Close, contentDescription = "停止自动滚动")
+                    }
+                    IconButton(onClick = {
+                        autoScrollSpeed = (autoScrollSpeed - 0.5f).coerceAtLeast(0.5f)
+                    }) {
+                        Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "减速")
+                    }
+                    Text(
+                        "x%.1f".format(autoScrollSpeed),
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(horizontal = 2.dp),
+                    )
+                    IconButton(onClick = {
+                        autoScrollSpeed = (autoScrollSpeed + 0.5f).coerceAtMost(4f)
+                    }) {
+                        Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = "加速")
+                    }
+                }
             }
         }
 
@@ -625,70 +763,97 @@ fun ReaderScreen(vm: MdViewModel, markwon: Markwon) {
     }
 
     if (showToc) {
-        val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val tocState = rememberLazyListState()
         LaunchedEffect(showToc) {
             if (toc.isNotEmpty()) {
                 tocState.scrollToItem(currentHeading.coerceIn(0, toc.lastIndex))
             }
         }
-        ModalBottomSheet(onDismissRequest = { showToc = false }, sheetState = sheet) {
-            Text(
-                "目录",
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+        // 常驻侧边栏:点条目跳转但保持展开,选中项随滚动实时高亮
+        Row(Modifier.fillMaxSize()) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .background(Color.Black.copy(alpha = 0.32f))
+                    .clickable { showToc = false },
             )
-            if (toc.isEmpty()) {
-                Text(
-                    "没有检测到标题",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(24.dp),
-                )
-            } else {
-                LazyColumn(
-                    state = tocState,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 28.dp),
-                    contentPadding = PaddingValues(horizontal = 16.dp),
+            Surface(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(if (LocalConfiguration.current.screenWidthDp >= 600) 340.dp else 320.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                shape = RoundedCornerShape(topStart = 22.dp, bottomStart = 22.dp),
+            ) {
+                Column(
+                    Modifier
+                        .statusBarsPadding()
+                        .navigationBarsPadding(),
                 ) {
-                    itemsIndexed(toc) { index, entry ->
-                        val selected = index == currentHeading
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(
-                                    if (selected) MaterialTheme.colorScheme.primaryContainer
-                                    else Color.Transparent
-                                )
-                                .clickable {
-                                    showToc = false
-                                    currentHeading = index
-                                    scrollRef.value?.let { sv ->
-                                        val target = scrollToHeading(textRef.value, entry.offset)
-                                        target?.let { sv.smoothScrollTo(0, it) }
-                                    }
-                                }
-                                .padding(vertical = 12.dp, horizontal = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(start = 20.dp, end = 8.dp, top = 10.dp, bottom = 4.dp),
+                    ) {
+                        Text(
+                            "目录",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = { showToc = false }) {
+                            Icon(Icons.Outlined.Close, contentDescription = "关闭目录")
+                        }
+                    }
+                    if (toc.isEmpty()) {
+                        Text(
+                            "没有检测到标题",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(20.dp),
+                        )
+                    } else {
+                        LazyColumn(
+                            state = tocState,
+                            modifier = Modifier.fillMaxWidth(),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                         ) {
-                            if (entry.level >= 2) {
-                                val inset = (entry.level - 2) * 12
-                                Spacer(Modifier.width(inset.dp))
+                            itemsIndexed(toc) { index, entry ->
+                                val selected = index == currentHeading
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(
+                                            if (selected) MaterialTheme.colorScheme.primaryContainer
+                                            else Color.Transparent
+                                        )
+                                        .clickable {
+                                            currentHeading = index
+                                            scrollRef.value?.let { sv ->
+                                                val target = scrollToHeading(textRef.value, entry.offset)
+                                                target?.let { sv.smoothScrollTo(0, it) }
+                                            }
+                                        }
+                                        .padding(vertical = 12.dp, horizontal = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    if (entry.level >= 2) {
+                                        val inset = (entry.level - 2) * 12
+                                        Spacer(Modifier.width(inset.dp))
+                                    }
+                                    Text(
+                                        entry.title,
+                                        style = if (entry.level <= 2) MaterialTheme.typography.titleMedium
+                                        else MaterialTheme.typography.bodyLarge,
+                                        fontWeight = if (entry.level == 1) FontWeight.Bold
+                                        else if (entry.level == 2) FontWeight.SemiBold else FontWeight.Normal,
+                                        color = if (selected || entry.level == 1) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
-                            Text(
-                                entry.title,
-                                style = if (entry.level <= 2) MaterialTheme.typography.titleMedium
-                                else MaterialTheme.typography.bodyLarge,
-                                fontWeight = if (entry.level == 1) FontWeight.Bold
-                                else if (entry.level == 2) FontWeight.SemiBold else FontWeight.Normal,
-                                color = if (selected || entry.level == 1) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
                         }
                     }
                 }
@@ -697,7 +862,12 @@ fun ReaderScreen(vm: MdViewModel, markwon: Markwon) {
     }
 
     if (showType) {
-        ReadingPrefsSheet(vm = vm, onDismiss = { showType = false })
+        ReadingPrefsSheet(
+            vm = vm,
+            autoScroll = autoScrollActive,
+            onAutoScrollChange = { autoScrollActive = it },
+            onDismiss = { showType = false },
+        )
     }
 
     previewBitmap?.let { bmp ->
@@ -742,11 +912,64 @@ fun ReaderScreen(vm: MdViewModel, markwon: Markwon) {
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("分享渲染后 HTML") }
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            showShareMenu = false
+                            val sv = scrollRef.value
+                            val bmp = if (sv != null) runCatching {
+                                Bitmap.createBitmap(
+                                    sv.width.coerceAtLeast(1),
+                                    sv.height.coerceAtLeast(1),
+                                    Bitmap.Config.ARGB_8888,
+                                ).also { sv.draw(Canvas(it)) }
+                            }.getOrNull() else null
+                            if (bmp != null) shareImage(bmp) else vm.notify("截图失败")
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("分享当前屏幕截图") }
                 }
             },
             confirmButton = {},
             dismissButton = {
                 androidx.compose.material3.TextButton(onClick = { showShareMenu = false }) { Text("取消") }
+            },
+        )
+    }
+
+    if (showTableMenu && tableOrdinal >= 0) {
+        val tableMd = TableSource.markdownAt(document.content, tableOrdinal)
+        val tableCsv = TableSource.csvAt(document.content, tableOrdinal)
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showTableMenu = false },
+            title = { Text("表格操作") },
+            text = {
+                Column {
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            showTableMenu = false
+                            if (tableMd != null) {
+                                copyToClipboard(context, tableMd)
+                                vm.notify("已复制表格 Markdown")
+                            } else vm.notify("未找到表格源文")
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("复制为 Markdown") }
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            showTableMenu = false
+                            if (tableCsv != null) {
+                                copyToClipboard(context, tableCsv)
+                                vm.notify("已复制表格 CSV")
+                            } else vm.notify("表格无法转为 CSV")
+                        },
+                        enabled = tableCsv != null,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("复制为 CSV") }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { showTableMenu = false }) { Text("取消") }
             },
         )
     }
@@ -995,39 +1218,16 @@ private fun ImagePreviewDialog(bitmap: Bitmap, onDismiss: () -> Unit, onSave: ()
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ReadingPrefsSheet(vm: MdViewModel, onDismiss: () -> Unit) {
+private fun ReadingPrefsSheet(
+    vm: MdViewModel,
+    autoScroll: Boolean,
+    onAutoScrollChange: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    var showColorPicker by remember { mutableStateOf(false) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .clickable { showColorPicker = true }
-                    .padding(vertical = 8.dp),
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("背景颜色", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        if (settings.readerBgColor == -1) "跟随主题" else "自定义",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Box(
-                    Modifier
-                        .size(28.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(
-                            if (settings.readerBgColor == -1) MaterialTheme.colorScheme.surface
-                            else Color(settings.readerBgColor and 0x00FFFFFF)
-                        ),
-                )
-            }
-            Spacer(Modifier.height(8.dp))
             Text("字号", style = MaterialTheme.typography.titleSmall)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -1087,10 +1287,51 @@ private fun ReadingPrefsSheet(vm: MdViewModel, onDismiss: () -> Unit) {
                     onCheckedChange = { v -> scope.launch { vm.settingsRepo.setLatexEnabled(v) } },
                 )
             }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(top = 8.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("提词器自动滚动", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "开启后匀速下滚,底部悬浮控件调速",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = autoScroll, onCheckedChange = onAutoScrollChange)
+            }
+            Text("标题字号缩放", style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "x%.2f".format(settings.headingScale),
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.width(56.dp),
+                )
+                Slider(
+                    value = settings.headingScale,
+                    onValueChange = { v -> scope.launch { vm.settingsRepo.setHeadingScale(v) } },
+                    valueRange = 0.8f..1.5f,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Text("版心宽度", style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "${settings.readerMaxWidth} dp",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.width(56.dp),
+                )
+                Slider(
+                    value = settings.readerMaxWidth.toFloat(),
+                    onValueChange = { v ->
+                        scope.launch { vm.settingsRepo.setReaderMaxWidth((v / 20f).toInt() * 20) }
+                    },
+                    valueRange = 480f..800f,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
-    }
-    if (showColorPicker) {
-        com.yumao.mdreader.ui.ReaderColorPickerSheet(vm = vm, onDismiss = { showColorPicker = false })
     }
 }
 
@@ -1125,6 +1366,11 @@ private fun scrollToHeading(tv: TextView?, offset: Int): Int? {
     return (layout.getLineTop(line)).coerceAtLeast(0)
 }
 
+private fun copyToClipboard(context: Context, text: String) {
+    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+    cm.setPrimaryClip(android.content.ClipData.newPlainText("mdreader", text))
+}
+
 private fun scrollToOffset(tv: TextView?, sv: ScrollView?, offset: Int) {
     if (tv == null || sv == null) return
     val layout = tv.layout ?: return
@@ -1132,7 +1378,9 @@ private fun scrollToOffset(tv: TextView?, sv: ScrollView?, offset: Int) {
     if (len == 0) return
     val line = layout.getLineForOffset(offset.coerceIn(0, len - 1))
     val margin = (110 * tv.resources.displayMetrics.density).toInt()
-    sv.scrollTo(0, (layout.getLineTop(line) - margin).coerceAtLeast(0))
+    val y = (layout.getLineTop(line) - margin).coerceAtLeast(0)
+    Log.i("MDReader", "scrollToOffset offset=$offset line=$line y=$y layoutLen=${layout.text.length} textLen=$len")
+    sv.scrollTo(0, y)
 }
 
 private fun startMarkwonRender(
@@ -1143,28 +1391,7 @@ private fun startMarkwonRender(
     done: AtomicBoolean,
     onDone: (CharSequence?) -> Unit,
 ) {
-    markwonRenderExecutor.execute {
-        var out: CharSequence? = null
-        try {
-            out = markwon.toMarkdown(content)
-        } catch (t: Throwable) {
-            Log.w("MDReader", "markdown render failed (attempt=$attempt)", t)
-        }
-        markwonMainHandler.post {
-            if (done.compareAndSet(false, true) && markwonRenderSeq.get() == seq) onDone(out)
-        }
-    }
-    markwonMainHandler.postDelayed({
-        if (done.get() || markwonRenderSeq.get() != seq) return@postDelayed
-        Log.w("MDReader", "render watchdog fired (seq=$seq attempt=$attempt)")
-        if (attempt < 3) {
-            startMarkwonRender(seq, markwon, content, attempt + 1, done, onDone)
-        } else {
-            markwonMainHandler.post {
-                if (done.compareAndSet(false, true) && markwonRenderSeq.get() == seq) onDone(null)
-            }
-        }
-    }, RENDER_TIMEOUT_MS)
+    renderPool.submit(seq, markwon, content, attempt, done, onDone)
 }
 
 private fun restoreScroll(tv: TextView, sv: View?, anchor: Int): Int {
@@ -1233,7 +1460,16 @@ private class ReadingTextView(context: Context) : TextView(context) {
 
     private val density = resources.displayMetrics.density
     private val basePad = (20 * density).toInt()
-    private val maxContent = (680 * density).toInt()
+    private var maxContent = (680 * density).toInt()
+
+    /** Reading measure (content column) cap in dp; relayouts when changed. */
+    var maxContentDp: Int = 680
+        set(value) {
+            if (field == value) return
+            field = value
+            maxContent = (value * density).toInt()
+            requestLayout()
+        }
 
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
     private var downX = 0f
@@ -1243,6 +1479,9 @@ private class ReadingTextView(context: Context) : TextView(context) {
     var onImageTap: ((Drawable) -> Unit)? = null
     /** Fired once when a pinch gesture ends, with cumulative scale factor (finalSize / startSize). */
     var onPinchFinished: ((Float) -> Unit)? = null
+    var onCodeTap: ((String) -> Unit)? = null
+    var onLatexTap: ((String) -> Unit)? = null
+    var onTableTap: ((Int) -> Unit)? = null
 
     private val scaleDetector = android.view.ScaleGestureDetector(context, object : android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
         private var startPx = 0f
@@ -1310,6 +1549,10 @@ private class ReadingTextView(context: Context) : TextView(context) {
                         listener(result)
                         return true
                     }
+                    if (handleSpecialTap(event.x, event.y)) {
+                        isPressed = false
+                        return true
+                    }
                 }
             }
             MotionEvent.ACTION_CANCEL -> removeCallbacks(longPressRunnable)
@@ -1328,5 +1571,42 @@ private class ReadingTextView(context: Context) : TextView(context) {
             if (offset in s until e || (offset - 1) in s until e) return span
         }
         return null
+    }
+
+    /** Tap-to-copy hit testing for formulas / code blocks / inline code / tables. */
+    private fun handleSpecialTap(x: Float, y: Float): Boolean {
+        val sp = text as? Spanned ?: return false
+        if (sp.isEmpty() || layout == null) return false
+        val offset = getOffsetForPosition(x, y).coerceIn(0, (sp.length - 1).coerceAtLeast(0))
+
+        sp.getSpans(0, sp.length, LatexSpan::class.java).firstOrNull {
+            offset >= sp.getSpanStart(it) && offset < sp.getSpanEnd(it)
+        }?.let { span ->
+            onLatexTap?.invoke(span.latexSource)
+            return true
+        }
+
+        sp.getSpans(0, sp.length, CodeBlockSpan::class.java).firstOrNull {
+            offset >= sp.getSpanStart(it) && offset < sp.getSpanEnd(it)
+        }?.let { span ->
+            onCodeTap?.invoke(sp.subSequence(sp.getSpanStart(span), sp.getSpanEnd(span)).toString().trim())
+            return true
+        }
+
+        sp.getSpans(0, sp.length, CodeSpan::class.java).firstOrNull {
+            offset >= sp.getSpanStart(it) && offset < sp.getSpanEnd(it)
+        }?.let { span ->
+            onCodeTap?.invoke(sp.subSequence(sp.getSpanStart(span), sp.getSpanEnd(span)).toString())
+            return true
+        }
+
+        val tables = sp.getSpans(0, sp.length, TableSpan::class.java).sortedBy { sp.getSpanStart(it) }
+        tables.forEachIndexed { idx, span ->
+            if (offset >= sp.getSpanStart(span) && offset < sp.getSpanEnd(span)) {
+                onTableTap?.invoke(idx)
+                return true
+            }
+        }
+        return false
     }
 }

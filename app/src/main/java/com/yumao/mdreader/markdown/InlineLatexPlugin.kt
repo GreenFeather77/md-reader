@@ -13,6 +13,11 @@ import org.commonmark.node.CustomNode
 import org.commonmark.node.Node
 import ru.noties.jlatexmath.JLatexMathDrawable
 
+/** Marks rendered inline-formula spans so taps can copy the LaTeX source. */
+interface LatexSpan {
+    val latexSource: String
+}
+
 /**
  * Renders single $...$ inline math with baseline-correct alignment.
  *
@@ -56,10 +61,10 @@ class InlineLatexPlugin(
     }
 
     private class InlineMathSpan(
-        private val latex: String,
+        override val latexSource: String,
         private val textPx: Float,
         private val color: Int,
-    ) : ReplacementSpan() {
+    ) : ReplacementSpan(), LatexSpan {
 
         override fun getSize(
             paint: Paint,
@@ -68,7 +73,7 @@ class InlineLatexPlugin(
             end: Int,
             fm: Paint.FontMetricsInt?,
         ): Int {
-            val entry = MathCache.get(latex, textPx, color)
+            val entry = MathCache.get(latexSource, textPx, color)
             if (entry == null) {
                 if (fm != null) {
                     val metrics = paint.fontMetricsInt
@@ -77,7 +82,7 @@ class InlineLatexPlugin(
                     fm.top = metrics.top
                     fm.bottom = metrics.bottom
                 }
-                return paint.measureText(latex).toInt()
+                return paint.measureText(latexSource).toInt()
             }
             if (fm != null) {
                 fm.ascent = -(entry.height - entry.depth)
@@ -99,9 +104,9 @@ class InlineLatexPlugin(
             bottom: Int,
             paint: Paint,
         ) {
-            val entry = MathCache.get(latex, textPx, color)
+            val entry = MathCache.get(latexSource, textPx, color)
             if (entry == null) {
-                canvas.drawText(latex, x, y.toFloat(), paint)
+                canvas.drawText(latexSource, x, y.toFloat(), paint)
                 return
             }
             val left = x.toInt()
